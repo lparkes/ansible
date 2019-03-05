@@ -1829,6 +1829,9 @@ class PyVmomiHelper(PyVmomi):
                 # other disks defined
                 pass
 
+            if 'storage_policy' in expected_disk_spec:
+                diskspec.profile = self.get_storage_policy(expected_disk_spec.get('storage_policy'))
+
             kb = self.get_configured_disk_size(expected_disk_spec)
             # VMWare doesn't allow to reduce disk sizes
             if kb < diskspec.device.capacityInKB:
@@ -2151,6 +2154,12 @@ class PyVmomiHelper(PyVmomi):
         self.configure_network(vm_obj=vm_obj)
         self.configure_cdrom(vm_obj=vm_obj)
 
+        if self.params['storage_policy'] is not None:
+            vm_policy = self.get_storage_policy(self.params['storage_policy'])
+            if vm_policy is None:
+                self.module.fail_json(msg="Couldn't find storage policy called: %s" % self.params['storage_policy'])
+            self.configspec.vmProfile = vm_policy
+
         # Find if we need network customizations (find keys in dictionary that requires customizations)
         network_changes = False
         for nw in self.params['networks']:
@@ -2300,7 +2309,7 @@ class PyVmomiHelper(PyVmomi):
                         return {'changed': self.change_applied, 'failed': True, 'instance': vm_facts, 'op': 'customization'}
 
             vm_facts = self.gather_facts(vm)
-            return {'changed': self.change_applied, 'failed': False, 'instance': vm_facts}
+            return {'changed': self.change_applied, 'failed': False, 'instance': vm_facts, 'configspec': configspec_json}
 
     def get_snapshots_by_name_recursively(self, snapshots, snapname):
         snap_obj = []
@@ -2551,6 +2560,7 @@ def main():
         vapp_properties=dict(type='list', default=[]),
         datastore=dict(type='str'),
         convert=dict(type='str', choices=['thin', 'thick', 'eagerzeroedthick']),
+        storage_policy=dict(type='str'),
     )
 
     module = AnsibleModule(argument_spec=argument_spec,

@@ -30,7 +30,7 @@ except ImportError:
 PYVMOMI_IMP_ERR = None
 try:
     from pyVim import connect
-    from pyVmomi import vim, vmodl, VmomiSupport
+    from pyVmomi import vim, vmodl, VmomiSupport, pbm, SoapStubAdapter
     HAS_PYVMOMI = True
     HAS_PYVMOMIJSON = hasattr(VmomiSupport, 'VmomiJSONEncoder')
 except ImportError:
@@ -486,7 +486,7 @@ def vmware_argument_spec():
     )
 
 
-def connect_to_api(module, disconnect_atexit=True):
+def _connect_to_api(module, disconnect_atexit):
     hostname = module.params['hostname']
     username = module.params['username']
     password = module.params['password']
@@ -550,8 +550,30 @@ def connect_to_api(module, disconnect_atexit=True):
     # Also removal significantly speeds up the return of the module
     if disconnect_atexit:
         atexit.register(connect.Disconnect, service_instance)
-    return service_instance.RetrieveContent()
+    return service_instance
 
+def connect_to_api(module, disconnect_atexit=True):
+    return _connect_to_api(module, disconnect_atexit).RetrieveContent()
+
+def connect_to_pbm(module, si):
+    vpxdStub = si._stub
+    sessionCookie = vpxdStub.cookie.split('"')[1]
+    httpContext = VmomiSupport.GetHttpContext()
+    cookie = SimpleCookie()
+    cookie["vmware_soap_session"] = sessionCookie
+    httpContext["cookies"] = cookie
+    VmomiSupport.GetRequestContext()["vcSessionCookie"] = sessionCookie
+    hostname = vpxdStub.host.split(":")[0]
+
+    context = None
+    pbmStub = SoapStubAdapter(
+        host=hostname,
+        version="pbm.version.version1",
+        path="/pbm/sdk",
+        poolSize=0,
+        sslContext=context)
+
+    return pbm.ServiceInstance("ServiceInstance", pbmStub)
 
 def get_all_objs(content, vimtype, folder=None, recurse=True):
     if not folder:
@@ -799,9 +821,9 @@ class PyVmomi(object):
 
         self.module = module
         self.params = module.params
-        self.si = None
+        self.si = _connect_to_api(self.module)
         self.current_vm_obj = None
-        self.content = connect_to_api(self.module)
+        self.content = self.si.RetrieveContent()
 
     def is_vcenter(self):
         """
@@ -1380,3 +1402,36 @@ class PyVmomi(object):
         else:
             result = self._jsonify(obj)
         return result
+
+    def get_storage_policy(self, policy_name):
+        """
+        Searches the PBM for the named storage policy and then returns
+        an object that identifies this policy to the normal vSphere API
+        Args:
+            policy_name: the name of the policy
+
+        Returns: None or a list containing a single vim.vm.DefinedProfileSpec
+        """
+
+        if self.pbm_content is None:
+            self.pbm_content = connect_to_pbm(self.module, self.si).RetrieveContent()
+
+        profile_manager = self.pbm_content.profileManager
+        
+        profile_ids = profile_manager.PbmQueryProfile(
+            resourceType=pbm.profile.ResourceType(resourceType="STORAGE"),
+            profileCategory="REQUIREMENT")
+
+        policy_id = None
+
+        if len(profile_ids) > 0:
+            policies = profile_manager.PbmRetrieveContent(profileIds=profile_ids)
+            for policy in policies:
+                if policy.name == policy_name:
+                    policy_id = policy.profileId.uniqueId
+                    break
+
+        if policy_id is None:
+            return None
+
+        return [vim.vm.DefinedProfileSpec(profileId=policy_id)]
