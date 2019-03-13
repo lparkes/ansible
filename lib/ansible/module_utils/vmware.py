@@ -16,6 +16,7 @@ import ssl
 import time
 import traceback
 from random import randint
+from Cookie import SimpleCookie
 from distutils.version import StrictVersion
 
 REQUESTS_IMP_ERR = None
@@ -821,9 +822,10 @@ class PyVmomi(object):
 
         self.module = module
         self.params = module.params
-        self.si = _connect_to_api(self.module)
+        self.si = _connect_to_api(self.module, True)
         self.current_vm_obj = None
         self.content = self.si.RetrieveContent()
+        self.pbm_content = None
 
     def is_vcenter(self):
         """
